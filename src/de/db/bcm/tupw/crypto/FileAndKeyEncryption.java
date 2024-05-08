@@ -55,7 +55,7 @@ public class FileAndKeyEncryption implements AutoCloseable {
    // Instance variables
    //******************************************************************
 
-   private final SplitKeyEncryption splitKeyEncryption;
+   private SplitKeyEncryption splitKeyEncryption;
 
 
    //******************************************************************
@@ -96,6 +96,19 @@ public class FileAndKeyEncryption implements AutoCloseable {
          ArrayHelper.clear(keyFileBytes);
       }
    }
+
+   public FileAndKeyEncryption(final byte[] hmacKey, final String subject,int useKey) throws NoSuchAlgorithmException, InvalidKeyException {
+      Objects.requireNonNull(hmacKey, "HMAC key is null");
+      Objects.requireNonNull(subject, "Subject is null");
+
+      final byte[] keyFileBytes = subject.getBytes();
+      try {
+         splitKeyEncryption = new SplitKeyEncryption(hmacKey, keyFileBytes);
+      } finally {
+         ArrayHelper.clear(keyFileBytes);
+      }
+   }
+
 
 
    //******************************************************************

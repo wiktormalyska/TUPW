@@ -44,11 +44,15 @@
  */
 package de.db.bcm.tupw;
 
+import de.db.bcm.tupw.crypto.DataIntegrityException;
 import de.db.bcm.tupw.crypto.FileAndKeyEncryption;
+import de.db.bcm.tupw.crypto.InvalidCryptoParameterException;
 import de.db.bcm.tupw.numbers.Xoroshiro128plusplus;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
+import java.io.*;
+import java.nio.charset.CharacterCodingException;
+import java.security.InvalidKeyException;
+import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 
 /**
@@ -66,130 +70,162 @@ import java.util.Arrays;
  * @version 4.1.3
  */
 public class TUPW {
-   private static final int MAX_INPUT_BYTES = 50000000;
-   private static final int READ_BLOCK_SIZE = 4096;
+    private static final int MAX_INPUT_BYTES = 50000000;
+    private static final int READ_BLOCK_SIZE = 4096;
 
-   /**
-    * Implements a method that creates a deterministic HMAC key from
-    * a pseudo-random number generator with as fixed key
-    *
-    * @return The deterministic HMAC key
-    */
-   private static byte[] createHMACKey() {
-      final byte[] result = new byte[32];
-      // TODO: Do not use this seed constant. Roll your own!!!!
-      final Xoroshiro128plusplus xs128 = new Xoroshiro128plusplus(0x5A7F93DDD402915AL);
+    /**
+     * Implements a method that creates a deterministic HMAC key from
+     * a pseudo-random number generator with as fixed key
+     *
+     * @return The deterministic HMAC key
+     */
+    public static byte[] createHMACKey() {
+        final byte[] result = new byte[32];
+        // TODO: Do not use this seed constant. Roll your own!!!!
+        final Xoroshiro128plusplus xs128 = new Xoroshiro128plusplus(0x5A7F93DDD402915AL);
 
-      for (int i = 0; i < result.length; i++)
-         result[i] = xs128.nextByte();
+        for (int i = 0; i < result.length; i++)
+            result[i] = xs128.nextByte();
 
-      return result;
-   }
+        return result;
+    }
 
-   public static void main(final String[] args) {
-      int exitCode = 0;
-
-      if (args.length >= 3) {
-         // There are many ways to specify the HMAC key.
-         // One way is simply to use a static HMAC key which is only known to the program.
-         // TODO: Do not use this constant byte array. Roll your own!!!!
-         final byte[] HMAC_KEY = {(byte) 0x53, (byte) 0x67, (byte) 0xC3, (byte) 0x59,
-                  (byte) 0x4B, (byte) 0x46, (byte) 0x0F, (byte) 0xFA,
-                  (byte) 0x15, (byte) 0x21, (byte) 0x13, (byte) 0x6C,
-                  (byte) 0x7F, (byte) 0xDD, (byte) 0x33, (byte) 0x57,
-                  (byte) 0x26, (byte) 0xF3, (byte) 0x10, (byte) 0xA0,
-                  (byte) 0xE9, (byte) 0x16, (byte) 0xA4, (byte) 0x2E,
-                  (byte) 0x9E, (byte) 0x15, (byte) 0x8E, (byte) 0xF4,
-                  (byte) 0x03, (byte) 0x04, (byte) 0xAA, (byte) 0x2C};
-
-         // Another way is to calculate the HMAC key in a deterministic way
-         // TODO: Do not use both HMAC keys. Choose one of them. You may keep the constant HMAC_KEY as a decoy.
-         final byte[] CALCULATED_HMAC_KEY = createHMACKey();
-
-         // There are many other ways to create a HMAC key. Use you imagination.
-         try (FileAndKeyEncryption myEncryptor = new FileAndKeyEncryption(HMAC_KEY, args[1])) {
-            String subject = "";
-            int itemIndex = 2;
-
-            if (args.length >= 4) {
-               subject = args[2];
-               itemIndex++;
+    public static String encrypt(String filePath, String key, final byte[] HMAC_KEY) {
+        try (FileAndKeyEncryption myEncryptor = new FileAndKeyEncryption(HMAC_KEY, filePath)) {
+            StringBuilder stringBuilder = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    stringBuilder.append(line).append("\n");
+                }
             }
+            return myEncryptor.encryptData(stringBuilder.toString(), key);
 
-            if (args[0].substring(0, 1).toLowerCase().equals("e")) {
-               System.out.println(myEncryptor.encryptData(getInputFromWhereEver(args[itemIndex]), subject));
-            } else {
-               final char[] decryptedOutput = myEncryptor.decryptDataAsCharacterArray(getInputFromWhereEver(args[itemIndex]), subject);
-
-               System.out.println(decryptedOutput);
-
-               // Clear decrypted output after use
-               Arrays.fill(decryptedOutput, '\0');
-            }
-         } catch (final Exception e) {
+        } catch (final Exception e) {
             e.printStackTrace();
-            exitCode = 1;
-         }
-      } else {
-         System.err.println("Not enough arguments.");
-         System.err.println();
-         System.err.println("Usage:");
-         System.err.println("   tupw.jar encrypt {keyfile} [subject] {clearItem}");
-         System.err.println("   tupw.jar decrypt {keyfile} [subject] {encryptedItem}");
-         System.err.println();
-         System.err.println("If {clearItem}, or {encryptedItem} is '-' input is read from stdin.");
-         System.err.println("This makes it possible to use the program in a pipe.");
+            return null;
+        }
+    }
 
-         exitCode = 2;
-      }
+    public static String decrypt(String encryptedData, String key, final byte[] HMAC_KEY) {
+        try (FileAndKeyEncryption myEncryptor = new FileAndKeyEncryption(HMAC_KEY, key, 1)) {
+            final char[] decryptedOutput;
+            try {
+                decryptedOutput = myEncryptor.decryptDataAsCharacterArray(encryptedData, key);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
 
-      System.exit(exitCode);
-   }
+            return  decryptedOutput.toString();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
 
-   /**
-    * Get input either from the command line, or from stdin if third argument
-    * is "-"
-    *
-    * @param anArgument The command line argument that is either the data,
-    *                   or "-"
-    * @return Data to process
-    * @throws IllegalArgumentException if input stream is toot large
-    * @throws IOException              if there was an I/O error when reading the input bytes
-    */
-   static String getInputFromWhereEver(final String anArgument) throws IllegalArgumentException, IOException {
-      String result;
+    public static void main(final String[] args) {
+        int exitCode = 0;
 
-      // Get input from System.in, if third argument is "-", or from the 
-      // third command line argument, if it is something else
-      if (anArgument.equals("-")) {
-         result = getSystemInAsString();
-      } else {
-         result = anArgument;
-      }
+        if (args.length >= 3) {
+            // There are many ways to specify the HMAC key.
+            // One way is simply to use a static HMAC key which is only known to the program.
+            // TODO: Do not use this constant byte array. Roll your own!!!!
+            final byte[] HMAC_KEY = {(byte) 0x53, (byte) 0x67, (byte) 0xC3, (byte) 0x59,
+                    (byte) 0x4B, (byte) 0x46, (byte) 0x0F, (byte) 0xFA,
+                    (byte) 0x15, (byte) 0x21, (byte) 0x13, (byte) 0x6C,
+                    (byte) 0x7F, (byte) 0xDD, (byte) 0x33, (byte) 0x57,
+                    (byte) 0x26, (byte) 0xF3, (byte) 0x10, (byte) 0xA0,
+                    (byte) 0xE9, (byte) 0x16, (byte) 0xA4, (byte) 0x2E,
+                    (byte) 0x9E, (byte) 0x15, (byte) 0x8E, (byte) 0xF4,
+                    (byte) 0x03, (byte) 0x04, (byte) 0xAA, (byte) 0x2C};
 
-      return result;
-   }
+            // Another way is to calculate the HMAC key in a deterministic way
+            // TODO: Do not use both HMAC keys. Choose one of them. You may keep the constant HMAC_KEY as a decoy.
+            final byte[] CALCULATED_HMAC_KEY = createHMACKey();
 
-   /**
-    * Convert System.in input stream to a <code>String</code>
-    *
-    * @return Content of InputStream System.in as String
-    * @throws IllegalArgumentException if the input stream is too large
-    * @throws IOException              if there was an I/O error while reading the input bytes
-    */
-   static String getSystemInAsString() throws IllegalArgumentException, IOException {
-      final ByteArrayOutputStream result = new ByteArrayOutputStream();
-      final byte[] buffer = new byte[READ_BLOCK_SIZE];
-      int length;
+            // There are many other ways to create a HMAC key. Use you imagination.
+            try (FileAndKeyEncryption myEncryptor = new FileAndKeyEncryption(HMAC_KEY, args[1])) {
+                String subject = "";
+                int itemIndex = 2;
 
-      while ((length = System.in.read(buffer)) != -1) {
-         result.write(buffer, 0, length);
+                if (args.length >= 4) {
+                    subject = args[2];
+                    itemIndex++;
+                }
 
-         if (result.size() > MAX_INPUT_BYTES)
-            throw new IllegalArgumentException("Input from input stream is larger than " + String.format("%,d", MAX_INPUT_BYTES) + " bytes");
-      }
+                if (args[0].substring(0, 1).toLowerCase().equals("e")) {
+                    System.out.println(myEncryptor.encryptData(getInputFromWhereEver(args[itemIndex]), subject));
+                } else {
+                    final char[] decryptedOutput = myEncryptor.decryptDataAsCharacterArray(getInputFromWhereEver(args[itemIndex]), subject);
 
-      // Convert to String with Java file encoding
-      return result.toString(System.getProperty("file.encoding")).trim(); // Need trim here as pipes append an unnecessary newline
-   }
+                    System.out.println(decryptedOutput);
+
+                    // Clear decrypted output after use
+                    Arrays.fill(decryptedOutput, '\0');
+                }
+            } catch (final Exception e) {
+                e.printStackTrace();
+                exitCode = 1;
+            }
+        } else {
+            System.err.println("Not enough arguments.");
+            System.err.println();
+            System.err.println("Usage:");
+            System.err.println("   tupw.jar encrypt {keyfile} [subject] {clearItem}");
+            System.err.println("   tupw.jar decrypt {keyfile} [subject] {encryptedItem}");
+            System.err.println();
+            System.err.println("If {clearItem}, or {encryptedItem} is '-' input is read from stdin.");
+            System.err.println("This makes it possible to use the program in a pipe.");
+
+            exitCode = 2;
+        }
+
+        System.exit(exitCode);
+    }
+
+    /**
+     * Get input either from the command line, or from stdin if third argument
+     * is "-"
+     *
+     * @param anArgument The command line argument that is either the data,
+     *                   or "-"
+     * @return Data to process
+     * @throws IllegalArgumentException if input stream is toot large
+     * @throws IOException              if there was an I/O error when reading the input bytes
+     */
+    static String getInputFromWhereEver(final String anArgument) throws IllegalArgumentException, IOException {
+        String result;
+
+        // Get input from System.in, if third argument is "-", or from the
+        // third command line argument, if it is something else
+        if (anArgument.equals("-")) {
+            result = getSystemInAsString();
+        } else {
+            result = anArgument;
+        }
+
+        return result;
+    }
+
+    /**
+     * Convert System.in input stream to a <code>String</code>
+     *
+     * @return Content of InputStream System.in as String
+     * @throws IllegalArgumentException if the input stream is too large
+     * @throws IOException              if there was an I/O error while reading the input bytes
+     */
+    static String getSystemInAsString() throws IllegalArgumentException, IOException {
+        final ByteArrayOutputStream result = new ByteArrayOutputStream();
+        final byte[] buffer = new byte[READ_BLOCK_SIZE];
+        int length;
+
+        while ((length = System.in.read(buffer)) != -1) {
+            result.write(buffer, 0, length);
+
+            if (result.size() > MAX_INPUT_BYTES)
+                throw new IllegalArgumentException("Input from input stream is larger than " + String.format("%,d", MAX_INPUT_BYTES) + " bytes");
+        }
+
+        // Convert to String with Java file encoding
+        return result.toString(System.getProperty("file.encoding")).trim(); // Need trim here as pipes append an unnecessary newline
+    }
 }
